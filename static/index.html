@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SAR 目标检测与分析系统</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- Header / Brand Bar -->
+      <header class="app-header">
+        <div class="header-brand">
+          <div class="radar-icon" aria-hidden="true">
+            <div class="radar-circle"></div>
+            <div class="radar-circle"></div>
+            <div class="radar-circle"></div>
+            <div class="radar-sweep"></div>
+            <div class="radar-dot"></div>
+            <div class="radar-dot"></div>
+          </div>
+          <div>
+            <div class="header-title">SAR 目标检测与分析系统</div>
+          </div>
+        </div>
+        <div class="header-spacer"></div>
+        <div class="header-status-dot" id="headerDot"></div>
+        <div class="header-status-text">SYSTEM ONLINE</div>
+      </header>
+
+      <!-- Left Sidebar -->
+      <aside class="side-column">
+        <div class="controls-stack">
+          <!-- Model Loading -->
+          <section class="tech-panel">
+            <div class="panel-title">
+              <span class="p-accent"></span>
+              <span class="p-icon">&#x1F9E0;</span>
+              模型加载
+            </div>
+            <label class="field-label" for="detectorSelect">&#x1F50D; 检测模型</label>
+            <select id="detectorSelect"></select>
+            <div class="file-actions">
+              <button class="mini-btn mini-upload" data-category="detectors" title="上传检测模型">&#x1F4C1; 上传</button>
+              <button class="mini-btn mini-delete" data-category="detectors" title="删除选中模型">&#x1F5D1; 删除</button>
+            </div>
+            <input type="file" id="detectorFileInput" class="file-input-hidden" data-category="detectors" accept=".pt,.pth" />
+
+            <label class="field-label" for="classifierSelect">&#x1F322; RF 分类模型</label>
+            <select id="classifierSelect"></select>
+            <div class="file-actions">
+              <button class="mini-btn mini-upload" data-category="classifiers" title="上传分类模型">&#x1F4C1; 上传</button>
+              <button class="mini-btn mini-delete" data-category="classifiers" title="删除选中模型">&#x1F5D1; 删除</button>
+            </div>
+            <input type="file" id="classifierFileInput" class="file-input-hidden" data-category="classifiers" accept=".pkl,.joblib" />
+
+            <button id="refreshFilesBtn" class="tech-button">
+              <span class="btn-icon">&#x21BB;</span> 刷新文件列表
+            </button>
+          </section>
+
+          <!-- Image & Detection -->
+          <section class="tech-panel">
+            <div class="panel-title">
+              <span class="p-accent"></span>
+              <span class="p-icon">&#x1F5BC;</span>
+              图像与检测
+            </div>
+            <label class="field-label" for="imageSelect">&#x1F4F7; SAR 图像</label>
+            <select id="imageSelect"></select>
+            <div class="file-actions">
+              <button class="mini-btn mini-upload" data-category="images" title="上传 SAR 图像">&#x1F4C1; 上传</button>
+              <button class="mini-btn mini-delete" data-category="images" title="删除选中图像">&#x1F5D1; 删除</button>
+            </div>
+            <input type="file" id="imageFileInput" class="file-input-hidden" data-category="images" accept=".png,.jpg,.jpeg,.tif,.tiff" />
+
+            <label class="field-label" for="patchSizeInput">&#x2702; 图像切片大小 (px)</label>
+            <input id="patchSizeInput" type="number" min="128" max="4096" step="64" value="640" />
+            <div id="overlapInfo" class="hint-line">切片重叠固定为 64 px</div>
+
+            <label class="check-row">
+              <input id="useRfCheckbox" type="checkbox" />
+              <span>&#x1F91E; 启用 RF 分类器</span>
+            </label>
+
+            <button id="runDetectionBtn" class="tech-button primary">
+              <span class="btn-icon">&#x25B6;</span> 运行检测
+            </button>
+
+            <label class="field-label" for="statusBox">&#x1F4CA; 状态信息</label>
+            <textarea id="statusBox" readonly></textarea>
+          </section>
+
+          <!-- Result Editing -->
+          <section class="tech-panel">
+            <div class="panel-title">
+              <span class="p-accent"></span>
+              <span class="p-icon">&#x270F;</span>
+              结果编辑
+            </div>
+            <div class="button-row">
+              <button id="addModeBtn" class="tech-button" disabled>
+                <span class="btn-icon">&#x2795;</span> 添加目标
+              </button>
+              <button id="deleteModeBtn" class="tech-button" disabled>
+                <span class="btn-icon">&#x2716;</span> 删除目标
+              </button>
+            </div>
+            <button id="exportBtn" class="tech-button primary" disabled>
+              <span class="btn-icon">&#x1F4E4;</span> 一键导出结果
+            </button>
+            <div id="exportLinks" class="export-links"></div>
+          </section>
+        </div>
+
+        <!-- Resize Handle -->
+        <div
+          id="leftResizeHandle"
+          class="left-resize-handle"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="调整左侧上下区域比例"
+          tabindex="0"
+        ></div>
+
+        <!-- Detection Results Table -->
+        <section class="tech-panel results-panel">
+          <div class="panel-title">
+            <span class="p-accent"></span>
+            <span class="p-icon">&#x1F4CA;</span>
+            检测结果
+          </div>
+          <div class="table-wrap">
+            <table id="resultsTable">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>类别</th>
+                  <th>置信度</th>
+                  <th>X</th>
+                  <th>Y</th>
+                  <th>宽度</th>
+                  <th>高度</th>
+                  <th>散射点数</th>
+                  <th>平均散射强度</th>
+                  <th>Hu矩1</th>
+                  <th>Hu矩2</th>
+                  <th>RF结果</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Image Canvas -->
+      <main class="image-column">
+        <section class="tech-panel image-panel">
+          <div class="canvas-head">
+            <span id="imageTitle">&#x1F4F7; 未加载图像</span>
+            <span id="zoomLabel">100%</span>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="imageCanvas"></canvas>
+          </div>
+        </section>
+      </main>
+
+      <!-- Status Bar -->
+      <footer class="status-bar">
+        <div class="status-indicator">
+          <span class="status-dot" id="statusDot"></span>
+        </div>
+        <span id="globalStatus">就绪</span>
+        <progress id="jobProgress" value="0" max="100" hidden></progress>
+      </footer>
+    </div>
+
+    <script src="/static/app.js?v=single-image-select"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+yolo:
+  device: "auto"
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+
+random_forest:
+  enabled: true
+
+image_processing:
+  patch_size: 640
+  overlap: 64
+  nms_threshold: 0.45
+
+ui:
+  default_rf_enabled: true
+
