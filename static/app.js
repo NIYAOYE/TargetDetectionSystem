@@ -309,7 +309,7 @@ function loadSelectedImage() {
 
   if (!imageName) {
     state.image = null;
-    els.imageTitle.textContent = "\u{1F4F7} 未加载图像";
+    els.imageTitle.textContent = "未加载图像";
     drawCanvas();
     updateRunButton();
     return;
@@ -319,7 +319,7 @@ function loadSelectedImage() {
   img.onload = () => {
     state.image = img;
     fitImageToCanvas();
-    els.imageTitle.textContent = `\u{1F4F7} ${imageName}`;
+    els.imageTitle.textContent = imageName;
     setStatus(`已加载图像: ${imageName}`);
     setStatusBox([
       `当前图像：${imageName}`,
@@ -526,10 +526,10 @@ function rfClass(detection) {
 }
 
 function detectionColor(detection) {
-  if (detection.source === "manual") return "#0096ff";
-  if (detection.rf_result === 1) return "#25f66a";
-  if (detection.rf_result === 0) return "#ff4d4d";
-  return "#f5e642";
+  if (detection.source === "manual") return "#65a7ff";
+  if (detection.rf_result === 1) return "#51e88c";
+  if (detection.rf_result === 0) return "#ff6673";
+  return "#f4d35e";
 }
 
 function selectDetection(id, center) {
@@ -589,7 +589,7 @@ function drawCanvas() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (!state.image) {
-    ctx.fillStyle = "#94a3b8";
+    ctx.fillStyle = "#9cb2b2";
     ctx.font = "14px Microsoft YaHei, Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("未加载图像", canvas.width / 2, canvas.height / 2);
@@ -607,7 +607,7 @@ function drawCanvas() {
 
   if (state.drawStart && state.drawCurrent) {
     const rect = normalizedRect(state.drawStart, state.drawCurrent);
-    ctx.strokeStyle = "#0096ff";
+    ctx.strokeStyle = "#65a7ff";
     ctx.lineWidth = 2 / state.view.scale;
     ctx.setLineDash([8 / state.view.scale, 5 / state.view.scale]);
     ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
@@ -632,7 +632,7 @@ function drawDetection(ctx, detection, selected) {
   const labelHeight = 18 / state.view.scale;
   const labelWidth = metrics.width + 8 / state.view.scale;
   const labelY = Math.max(0, y - labelHeight);
-  ctx.fillStyle = "rgba(10, 15, 22, 0.82)";
+  ctx.fillStyle = "rgba(4, 12, 18, 0.86)";
   ctx.fillRect(x, labelY, labelWidth, labelHeight);
   ctx.fillStyle = color;
   ctx.fillText(label, x + 4 / state.view.scale, labelY + 13 / state.view.scale);
