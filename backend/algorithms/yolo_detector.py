@@ -30,6 +30,39 @@ class YOLODetector(BaseDetector):
             return self.class_names[class_id]
         return f"class_{class_id}"
 
+    @staticmethod
+    def _clip_xyxy(
+        xyxy: np.ndarray,
+        image_width: int,
+        image_height: int,
+    ) -> tuple[float, float, float, float]:
+        x1, y1, x2, y2 = [float(value) for value in xyxy]
+        x1 = max(0.0, min(x1, float(image_width)))
+        y1 = max(0.0, min(y1, float(image_height)))
+        x2 = max(x1, min(x2, float(image_width)))
+        y2 = max(y1, min(y2, float(image_height)))
+        return x1, y1, x2, y2
+
+    def _detections_from_result(self, result, image_shape: tuple[int, int, int]) -> List[Detection]:
+        image_height, image_width = image_shape[:2]
+        detections = []
+        for box in result.boxes:
+            xyxy = box.xyxy[0].cpu().numpy()
+            conf = float(box.conf[0].cpu().numpy())
+            class_id = int(box.cls[0].cpu().numpy())
+            x1, y1, x2, y2 = self._clip_xyxy(xyxy, image_width, image_height)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            detections.append(
+                Detection(
+                    bbox=(float(x1), float(y1), float(x2 - x1), float(y2 - y1)),
+                    confidence=conf,
+                    class_id=class_id,
+                    class_name=self._class_name(class_id),
+                )
+            )
+        return detections
+
     def detect(self, image: np.ndarray) -> List[Detection]:
         if image is None or image.size == 0:
             raise ValueError("Invalid image: empty input")
@@ -43,25 +76,9 @@ class YOLODetector(BaseDetector):
             verbose=False,
         )
 
-        detections = []
         if not results:
-            return detections
-
-        for box in results[0].boxes:
-            xyxy = box.xyxy[0].cpu().numpy()
-            conf = float(box.conf[0].cpu().numpy())
-            class_id = int(box.cls[0].cpu().numpy())
-            x1, y1, x2, y2 = xyxy
-            detections.append(
-                Detection(
-                    bbox=(float(x1), float(y1), float(x2 - x1), float(y2 - y1)),
-                    confidence=conf,
-                    class_id=class_id,
-                    class_name=self._class_name(class_id),
-                )
-            )
-
-        return detections
+            return []
+        return self._detections_from_result(results[0], image.shape)
 
     def detect_batch(self, images: List[np.ndarray]) -> List[List[Detection]]:
         if not images:
@@ -81,22 +98,7 @@ class YOLODetector(BaseDetector):
         )
 
         all_detections = []
-        for result in results:
-            detections = []
-            for box in result.boxes:
-                xyxy = box.xyxy[0].cpu().numpy()
-                conf = float(box.conf[0].cpu().numpy())
-                class_id = int(box.cls[0].cpu().numpy())
-                x1, y1, x2, y2 = xyxy
-                detections.append(
-                    Detection(
-                        bbox=(float(x1), float(y1), float(x2 - x1), float(y2 - y1)),
-                        confidence=conf,
-                        class_id=class_id,
-                        class_name=self._class_name(class_id),
-                    )
-                )
-            all_detections.append(detections)
+        for result, image in zip(results, images):
+            all_detections.append(self._detections_from_result(result, image.shape))
 
         return all_detections
-

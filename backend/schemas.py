@@ -9,6 +9,8 @@ class FileInfo(BaseModel):
     kind: str
     size: int = 0
     modified_at: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 class FilesResponse(BaseModel):

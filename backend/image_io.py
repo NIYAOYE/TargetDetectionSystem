@@ -9,7 +9,24 @@ import numpy as np
 from backend.core.base_detector import Detection
 
 
-def list_files(directory: Path, extensions: set[str]) -> list[dict]:
+def image_dimensions(path: Path) -> tuple[int, int] | None:
+    if path.suffix.lower() in {".tif", ".tiff"}:
+        try:
+            import rasterio
+
+            with rasterio.open(path) as src:
+                return int(src.width), int(src.height)
+        except Exception:
+            return None
+
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    height, width = img.shape[:2]
+    return int(width), int(height)
+
+
+def list_files(directory: Path, extensions: set[str], include_dimensions: bool = False) -> list[dict]:
     files = []
     if not directory.exists():
         return files
@@ -18,15 +35,18 @@ def list_files(directory: Path, extensions: set[str]) -> list[dict]:
         if not path.is_file() or path.suffix.lower() not in extensions:
             continue
         stat = path.stat()
-        files.append(
-            {
-                "name": path.name,
-                "display_name": path.name,
-                "kind": path.suffix.lower().lstrip("."),
-                "size": stat.st_size,
-                "modified_at": stat.st_mtime,
-            }
-        )
+        item = {
+            "name": path.name,
+            "display_name": path.name,
+            "kind": path.suffix.lower().lstrip("."),
+            "size": stat.st_size,
+            "modified_at": stat.st_mtime,
+        }
+        if include_dimensions:
+            dimensions = image_dimensions(path)
+            if dimensions is not None:
+                item["width"], item["height"] = dimensions
+        files.append(item)
     return files
 
 
@@ -93,14 +113,31 @@ def to_bgr_uint8(image: np.ndarray) -> np.ndarray:
     return image[:, :, :3].copy()
 
 
-def preview_png_bytes(image_path: Path) -> bytes:
+def preview_png_bytes(image_path: Path, max_size: int = 2048) -> tuple[bytes, dict[str, int]]:
     image = load_image_array(image_path)
     rgb = to_rgb_uint8(image)
+    full_height, full_width = rgb.shape[:2]
+    preview_width = full_width
+    preview_height = full_height
+
+    if max_size > 0:
+        largest_side = max(full_width, full_height)
+        if largest_side > max_size:
+            scale = max_size / largest_side
+            preview_width = max(1, int(round(full_width * scale)))
+            preview_height = max(1, int(round(full_height * scale)))
+            rgb = cv2.resize(rgb, (preview_width, preview_height), interpolation=cv2.INTER_AREA)
+
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     ok, buffer = cv2.imencode(".png", bgr)
     if not ok:
         raise ValueError("Failed to encode preview image")
-    return buffer.tobytes()
+    return buffer.tobytes(), {
+        "width": int(full_width),
+        "height": int(full_height),
+        "preview_width": int(preview_width),
+        "preview_height": int(preview_height),
+    }
 
 
 def detection_to_dict(index: int, detection: Detection) -> dict:
@@ -224,4 +261,3 @@ def export_bundle(
 def output_url(output_root: Path, path: Path) -> str:
     relative = path.resolve().relative_to(output_root.resolve())
     return "/outputs/" + "/".join(part for part in relative.parts)
-

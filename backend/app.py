@@ -80,7 +80,7 @@ def get_files():
     ]
     detectors.extend(list_files(DETECTOR_MODEL_DIR, DETECTOR_EXTENSIONS))
     return FilesResponse(
-        images=list_files(IMAGE_DIR, IMAGE_EXTENSIONS),
+        images=list_files(IMAGE_DIR, IMAGE_EXTENSIONS, include_dimensions=True),
         detectors=detectors,
         classifiers=list_files(CLASSIFIER_MODEL_DIR, CLASSIFIER_EXTENSIONS),
     )
@@ -90,7 +90,18 @@ def get_files():
 def get_image_preview(image_name: str):
     try:
         image_path = resolve_storage_file(IMAGE_DIR, image_name, IMAGE_EXTENSIONS)
-        return Response(content=preview_png_bytes(image_path), media_type="image/png")
+        content, metadata = preview_png_bytes(image_path)
+        return Response(
+            content=content,
+            media_type="image/png",
+            headers={
+                "X-Image-Width": str(metadata["width"]),
+                "X-Image-Height": str(metadata["height"]),
+                "X-Preview-Width": str(metadata["preview_width"]),
+                "X-Preview-Height": str(metadata["preview_height"]),
+                "Cache-Control": "no-store",
+            },
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -260,4 +271,3 @@ def delete_file(category: str, filename: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete: {exc}") from exc
 
     return UploadResponse(filename=safe_name, category=category, message="Deleted successfully")
-

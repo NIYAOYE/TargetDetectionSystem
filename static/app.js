@@ -3,9 +3,16 @@ const state = {
   files: null,
   image: null,
   imageName: "",
+  imageUrl: "",
+  imageWidth: 0,
+  imageHeight: 0,
+  imageLoaded: false,
+  imageLoadToken: 0,
   detections: [],
+  detectionsImageName: "",
   selectedDetection: -1,
   currentJobId: "",
+  currentJobImageName: "",
   pollTimer: null,
   mode: "normal",
   view: { scale: 1, offsetX: 0, offsetY: 0 },
@@ -258,7 +265,7 @@ function fillClassifierSelect() {
 function updateRunButton() {
   const imageName = ensureSelectValue(els.imageSelect);
   const detectorName = ensureSelectValue(els.detectorSelect);
-  els.runDetectionBtn.disabled = !imageName || !detectorName;
+  els.runDetectionBtn.disabled = !imageName || !detectorName || Boolean(state.pollTimer);
 }
 
 function setStatus(message) {
@@ -293,11 +300,36 @@ function ensureSelectValue(select) {
   return select.value;
 }
 
-function loadSelectedImage() {
+function revokeImageUrl() {
+  if (state.imageUrl) {
+    URL.revokeObjectURL(state.imageUrl);
+    state.imageUrl = "";
+  }
+}
+
+async function loadSelectedImage() {
   const imageName = ensureSelectValue(els.imageSelect);
+  const loadToken = state.imageLoadToken + 1;
+  state.imageLoadToken = loadToken;
+
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  document.body.classList.remove("is-processing");
+  els.jobProgress.hidden = true;
+
   state.imageName = imageName;
+  state.image = null;
+  revokeImageUrl();
+  const imageInfo = state.files?.images?.find((file) => file.name === imageName);
+  state.imageWidth = Number(imageInfo?.width) || 0;
+  state.imageHeight = Number(imageInfo?.height) || 0;
+  state.imageLoaded = false;
   state.currentJobId = "";
+  state.currentJobImageName = "";
   state.detections = [];
+  state.detectionsImageName = "";
   state.selectedDetection = -1;
   state.mode = "normal";
   updateModeButtons();
@@ -315,41 +347,68 @@ function loadSelectedImage() {
     return;
   }
 
+  els.imageTitle.textContent = imageName;
+  setStatus(`Loading image preview: ${imageName}`);
+  updateRunButton();
+  drawCanvas();
+
   const img = new Image();
+  img.dataset.fullWidth = String(state.imageWidth || 0);
+  img.dataset.fullHeight = String(state.imageHeight || 0);
   img.onload = () => {
+    if (loadToken !== state.imageLoadToken || state.imageName !== imageName || els.imageSelect.value !== imageName) {
+      return;
+    }
     state.image = img;
+    state.imageLoaded = true;
+    state.imageWidth = Number(img.dataset.fullWidth) || state.imageWidth || img.width;
+    state.imageHeight = Number(img.dataset.fullHeight) || state.imageHeight || img.height;
     fitImageToCanvas();
+    const shouldUpdatePreviewStatus = !state.currentJobId;
     els.imageTitle.textContent = imageName;
+    if (shouldUpdatePreviewStatus) {
     setStatus(`已加载图像: ${imageName}`);
     setStatusBox([
       `当前图像：${imageName}`,
       `当前切片大小：${els.patchSizeInput.value} px`,
       "检测状态：等待运行检测",
     ]);
+    }
+    updateRunButton();
     drawCanvas();
   };
   img.onerror = () => {
+    if (loadToken !== state.imageLoadToken || state.imageName !== imageName || els.imageSelect.value !== imageName) {
+      return;
+    }
     state.image = null;
+    state.imageLoaded = false;
+    state.imageWidth = 0;
+    state.imageHeight = 0;
     setStatus("图像预览加载失败");
+    updateRunButton();
     drawCanvas();
   };
   img.src = `/api/images/${encodeURIComponent(imageName)}/preview.png?ts=${Date.now()}`;
-  updateRunButton();
 }
 
 async function runDetection() {
   // Fallback: if imageName wasn't set via change event, use select value
   const selectedImageName = ensureSelectValue(els.imageSelect);
   if (selectedImageName && state.imageName !== selectedImageName) {
-    state.imageName = selectedImageName;
+    loadSelectedImage();
+    setStatus("Waiting for image preview to load...");
+    return;
   }
   if (!state.imageName) {
     setStatus("请先选择 SAR 图像");
     return;
   }
 
+  const jobImageName = state.imageName;
+
   const request = {
-    image_name: state.imageName,
+    image_name: jobImageName,
     detector_name: els.detectorSelect.value,
     classifier_name: els.classifierSelect.value || null,
     patch_size: Number(els.patchSizeInput.value),
@@ -368,6 +427,7 @@ async function runDetection() {
     els.jobProgress.hidden = false;
     els.jobProgress.value = 0;
     state.detections = [];
+    state.detectionsImageName = "";
     renderTable();
     drawCanvas();
 
@@ -375,7 +435,14 @@ async function runDetection() {
       method: "POST",
       body: JSON.stringify(request),
     });
+    if (state.imageName !== jobImageName) {
+      document.body.classList.remove("is-processing");
+      els.jobProgress.hidden = true;
+      updateRunButton();
+      return;
+    }
     state.currentJobId = job.job_id;
+    state.currentJobImageName = jobImageName;
     setStatus("检测任务已提交");
     setStatusBox([
       `当前图像：${state.imageName}`,
@@ -385,8 +452,8 @@ async function runDetection() {
     ]);
     startPolling();
   } catch (error) {
-    els.runDetectionBtn.disabled = false;
     els.jobProgress.hidden = true;
+    updateRunButton();
     setStatus(`检测启动失败: ${error.message}`);
   }
 }
@@ -400,12 +467,17 @@ function startPolling() {
 }
 
 async function pollJob() {
-  if (!state.currentJobId) {
+  const jobId = state.currentJobId;
+  const jobImageName = state.currentJobImageName;
+  if (!jobId) {
     return;
   }
 
   try {
-    const job = await apiFetch(`/api/jobs/${state.currentJobId}`);
+    const job = await apiFetch(`/api/jobs/${jobId}`);
+    if (jobId !== state.currentJobId || jobImageName !== state.currentJobImageName || job.image_name !== state.imageName) {
+      return;
+    }
     els.jobProgress.value = job.progress_current;
     setStatus(job.message);
     setStatusBox([
@@ -419,18 +491,18 @@ async function pollJob() {
       state.pollTimer = null;
       document.body.classList.remove("is-processing");
       els.jobProgress.hidden = true;
-      els.runDetectionBtn.disabled = false;
       els.addModeBtn.disabled = false;
       els.deleteModeBtn.disabled = false;
-      await refreshDetections();
+      await refreshDetections(jobId, jobImageName);
       els.exportBtn.disabled = state.detections.length === 0;
+      updateRunButton();
       setStatus(`检测完成，发现 ${state.detections.length} 个目标`);
     } else if (job.status === "error") {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
       document.body.classList.remove("is-processing");
       els.jobProgress.hidden = true;
-      els.runDetectionBtn.disabled = false;
+      updateRunButton();
       setStatus(`检测失败: ${job.error || job.message}`);
       setStatusBox([
         `当前图像：${job.image_name}`,
@@ -444,20 +516,27 @@ async function pollJob() {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
     els.jobProgress.hidden = true;
-    els.runDetectionBtn.disabled = false;
+    updateRunButton();
     setStatus(`任务查询失败: ${error.message}`);
   }
 }
 
-async function refreshDetections() {
-  if (!state.currentJobId) {
+async function refreshDetections(jobId = state.currentJobId, imageName = state.currentJobImageName) {
+  if (!jobId) {
     state.detections = [];
+    state.detectionsImageName = "";
   } else {
-    state.detections = await apiFetch(`/api/jobs/${state.currentJobId}/detections`);
+    const detections = await apiFetch(`/api/jobs/${jobId}/detections`);
+    if (jobId !== state.currentJobId || imageName !== state.currentJobImageName || imageName !== state.imageName) {
+      return false;
+    }
+    state.detections = detections;
+    state.detectionsImageName = imageName;
   }
   state.selectedDetection = -1;
   renderTable();
   drawCanvas();
+  return true;
 }
 
 function renderTable() {
@@ -572,12 +651,14 @@ function resizeCanvas() {
 function fitImageToCanvas(resetZoom = true) {
   if (!state.image) return;
   const canvas = els.imageCanvas;
-  const scale = Math.min(canvas.width / state.image.width, canvas.height / state.image.height) * 0.96;
+  const imageWidth = state.imageWidth || state.image.width;
+  const imageHeight = state.imageHeight || state.image.height;
+  const scale = Math.min(canvas.width / imageWidth, canvas.height / imageHeight) * 0.96;
   if (resetZoom || !Number.isFinite(state.view.scale)) {
     state.view.scale = Math.max(scale, 0.01);
   }
-  state.view.offsetX = (canvas.width - state.image.width * state.view.scale) / 2;
-  state.view.offsetY = (canvas.height - state.image.height * state.view.scale) / 2;
+  state.view.offsetX = (canvas.width - imageWidth * state.view.scale) / 2;
+  state.view.offsetY = (canvas.height - imageHeight * state.view.scale) / 2;
   updateZoomLabel();
 }
 
@@ -599,10 +680,12 @@ function drawCanvas() {
   ctx.save();
   ctx.translate(state.view.offsetX, state.view.offsetY);
   ctx.scale(state.view.scale, state.view.scale);
-  ctx.drawImage(state.image, 0, 0);
+  ctx.drawImage(state.image, 0, 0, state.imageWidth || state.image.width, state.imageHeight || state.image.height);
 
-  for (const detection of state.detections) {
-    drawDetection(ctx, detection, detection.id === state.selectedDetection);
+  if (state.detectionsImageName === state.imageName) {
+    for (const detection of state.detections) {
+      drawDetection(ctx, detection, detection.id === state.selectedDetection);
+    }
   }
 
   if (state.drawStart && state.drawCurrent) {
@@ -749,8 +832,8 @@ function canvasToImage(point) {
 
 function clampImagePoint(point) {
   return {
-    x: Math.max(0, Math.min(state.image.width, point.x)),
-    y: Math.max(0, Math.min(state.image.height, point.y)),
+    x: Math.max(0, Math.min(state.imageWidth || state.image.width, point.x)),
+    y: Math.max(0, Math.min(state.imageHeight || state.image.height, point.y)),
   };
 }
 

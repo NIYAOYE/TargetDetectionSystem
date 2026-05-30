@@ -60,10 +60,14 @@ class ImageSlicer:
             with rasterio.open(self.image_path) as src:
                 img = src.read()
                 if img.shape[0] == 1:
-                    return img[0]
-                return np.transpose(img, (1, 2, 0))
+                    img = img[0]
+                else:
+                    img = np.transpose(img, (1, 2, 0))
+                self._cached_image = img
+                return self._cached_image
 
-        return cv2.imread(self.image_path, cv2.IMREAD_UNCHANGED)
+        self._cached_image = cv2.imread(self.image_path, cv2.IMREAD_UNCHANGED)
+        return self._cached_image
 
     def _convert_to_3channel(self, patch: np.ndarray) -> np.ndarray:
         if patch.ndim == 2:
@@ -140,4 +144,3 @@ class CoordinateMapper:
         x_patch = x_global - patch_col * self.stride
         y_patch = y_global - patch_row * self.stride
         return (x_patch, y_patch, w, h)
-
