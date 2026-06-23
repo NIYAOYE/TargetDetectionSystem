@@ -19,11 +19,16 @@ def image_dimensions(path: Path) -> tuple[int, int] | None:
         except Exception:
             return None
 
-    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-    if img is None:
+    # Read only the image header instead of decoding the full image — SAR
+    # rasters can be hundreds of MB and this runs for every file on /api/files.
+    try:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            width, height = img.size
+        return int(width), int(height)
+    except Exception:
         return None
-    height, width = img.shape[:2]
-    return int(width), int(height)
 
 
 def list_files(directory: Path, extensions: set[str], include_dimensions: bool = False) -> list[dict]:

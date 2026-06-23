@@ -85,10 +85,8 @@ def PeakExtractX(imgdata: np.ndarray, max_num: int) -> Tuple[int, float]:
     if len(peaks) > max_num:
         peaks = peaks[:max_num]
 
-    total_intensity = float(np.sum(peaks[:, 2]))
-    if total_intensity > 0:
-        peaks[:, 2] = peaks[:, 2] / total_intensity
-
+    # Mean of the selected peaks' raw intensities. (Normalising to sum=1 first
+    # would make this always equal 1/count — a useless duplicate of the count.)
     return int(peaks.shape[0]), float(np.mean(peaks[:, 2]))
 
 
@@ -152,6 +150,11 @@ def extract_sar_features(image_crop: np.ndarray, bbox: Tuple[float, float, float
             gray_image = image_crop[:, :, 0]
     else:
         gray_image = image_crop
+
+    # OTSU thresholding below requires 8-bit input; 16-bit SAR rasters would
+    # otherwise throw and silently disable classification for the whole image.
+    if gray_image.dtype != np.uint8:
+        gray_image = cv2.normalize(gray_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
     ksize = 3 if min(gray_image.shape) < 32 else 5
     denoised_image = cv2.medianBlur(gray_image, ksize)
