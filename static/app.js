@@ -50,6 +50,9 @@ document.addEventListener("DOMContentLoaded", () => {
     "leftResizeHandle",
     "headerDot",
     "statusDot",
+    "segmentPanel",
+    "segmentImage",
+    "segmentCloseBtn",
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -74,6 +77,13 @@ function bindEvents() {
   els.exportBtn.addEventListener("click", exportResults);
   bindLeftResize();
   bindFileActions();
+
+  if (els.segmentCloseBtn) {
+    els.segmentCloseBtn.addEventListener("click", hideSegmentPanel);
+  }
+  if (els.segmentImage) {
+    els.segmentImage.addEventListener("click", () => openSegment(state.selectedDetection));
+  }
 
   const canvas = els.imageCanvas;
   canvas.addEventListener("wheel", onCanvasWheel, { passive: false });
@@ -332,6 +342,7 @@ async function loadSelectedImage() {
   state.detectionsImageName = "";
   state.selectedDetection = -1;
   state.mode = "normal";
+  hideSegmentPanel();
   updateModeButtons();
   els.exportBtn.disabled = true;
   els.addModeBtn.disabled = true;
@@ -428,7 +439,9 @@ async function runDetection() {
     els.jobProgress.value = 0;
     state.detections = [];
     state.detectionsImageName = "";
+    state.selectedDetection = -1;
     renderTable();
+    hideSegmentPanel();
     drawCanvas();
 
     const job = await apiFetch("/api/jobs/detect", {
@@ -535,6 +548,7 @@ async function refreshDetections(jobId = state.currentJobId, imageName = state.c
   }
   state.selectedDetection = -1;
   renderTable();
+  hideSegmentPanel();
   drawCanvas();
   return true;
 }
@@ -585,9 +599,40 @@ function renderTable() {
       row.appendChild(cell);
     });
 
+    row.title = "点击查看目标抠图";
     row.addEventListener("click", () => selectDetection(detection.id, true));
     tbody.appendChild(row);
   }
+}
+
+function segmentUrl(id) {
+  return `/api/jobs/${state.currentJobId}/detections/${id}/segment.png?ts=${Date.now()}`;
+}
+
+function updateSegmentPanel() {
+  const panel = els.segmentPanel;
+  const img = els.segmentImage;
+  if (!panel || !img) return;
+
+  const id = state.selectedDetection;
+  const exists = state.currentJobId && id >= 0 && state.detections.some((d) => d.id === id);
+  if (!exists) {
+    hideSegmentPanel();
+    return;
+  }
+  img.src = segmentUrl(id);
+  panel.hidden = false;
+}
+
+function hideSegmentPanel() {
+  if (!els.segmentPanel) return;
+  els.segmentPanel.hidden = true;
+  if (els.segmentImage) els.segmentImage.removeAttribute("src");
+}
+
+function openSegment(id) {
+  if (!state.currentJobId || id < 0) return;
+  window.open(segmentUrl(id), "_blank", "noreferrer");
 }
 
 function rfText(detection) {
@@ -614,6 +659,7 @@ function detectionColor(detection) {
 function selectDetection(id, center) {
   state.selectedDetection = id;
   renderTable();
+  updateSegmentPanel();
   if (center) {
     const detection = state.detections[id];
     if (detection) {
@@ -770,6 +816,7 @@ function onCanvasMouseDown(event) {
   } else {
     state.selectedDetection = -1;
     renderTable();
+    hideSegmentPanel();
     drawCanvas();
   }
 }
@@ -887,6 +934,7 @@ async function deleteDetection(index) {
     state.selectedDetection = -1;
     els.exportBtn.disabled = state.detections.length === 0;
     renderTable();
+    hideSegmentPanel();
     drawCanvas();
     setStatus("目标已删除");
   } catch (error) {

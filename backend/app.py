@@ -24,6 +24,7 @@ from backend.image_io import (
     output_url,
     preview_png_bytes,
     resolve_storage_file,
+    segment_target_on_background,
 )
 from backend.job_store import JobStore
 from backend.schemas import (
@@ -39,6 +40,25 @@ ensure_storage_dirs()
 app_config = load_config()
 overlap = int(app_config.get("image_processing", {}).get("overlap", DEFAULT_CONFIG["image_processing"]["overlap"]))
 jobs = JobStore(overlap=overlap)
+
+
+def _segmentation_settings() -> tuple[tuple[int, int, int], float]:
+    seg = app_config.get("segmentation", {})
+    defaults = DEFAULT_CONFIG["segmentation"]
+    rgb = seg.get("background") or defaults["background"]
+    try:
+        background_bgr = (int(rgb[2]), int(rgb[1]), int(rgb[0]))  # RGB config -> BGR for cv2
+    except (TypeError, IndexError, ValueError):
+        d = defaults["background"]
+        background_bgr = (int(d[2]), int(d[1]), int(d[0]))
+    try:
+        feather = float(seg.get("feather", defaults["feather"]))
+    except (TypeError, ValueError):
+        feather = float(defaults["feather"])
+    return background_bgr, feather
+
+
+SEGMENT_BACKGROUND_BGR, SEGMENT_FEATHER = _segmentation_settings()
 
 app = FastAPI(title="SAR Target Detection Browser Server")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -169,6 +189,28 @@ def delete_detection(job_id: str, index: int):
         raise HTTPException(status_code=404, detail="Job not found") from exc
     except IndexError as exc:
         raise HTTPException(status_code=404, detail="Detection not found") from exc
+
+
+@app.get("/api/jobs/{job_id}/detections/{index}/segment.png")
+def get_detection_segment(job_id: str, index: int):
+    try:
+        image_path, bbox = jobs.segment_target(job_id, index)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="Detection not found") from exc
+
+    try:
+        content = segment_target_on_background(
+            image_path,
+            bbox,
+            background_bgr=SEGMENT_BACKGROUND_BGR,
+            feather=SEGMENT_FEATHER,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return Response(content=content, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/jobs/{job_id}/export", response_model=ExportResponse)

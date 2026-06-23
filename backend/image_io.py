@@ -6,7 +6,11 @@ import os
 import cv2
 import numpy as np
 
+from backend.algorithms.feature_extractor import crop_detection_patch, segment_target_mask
 from backend.core.base_detector import Detection
+
+# Clean backdrop for the target cutout — matches the UI canvas (#0a0f16), BGR.
+SEGMENT_BACKGROUND_BGR = (22, 15, 10)
 
 
 def image_dimensions(path: Path) -> tuple[int, int] | None:
@@ -143,6 +147,47 @@ def preview_png_bytes(image_path: Path, max_size: int = 2048) -> tuple[bytes, di
         "preview_width": int(preview_width),
         "preview_height": int(preview_height),
     }
+
+
+def segment_target_on_background(
+    image_path: Path,
+    bbox: tuple[float, float, float, float],
+    background_bgr: tuple[int, int, int] = SEGMENT_BACKGROUND_BGR,
+    feather: float = 1.5,
+) -> bytes:
+    """Cut the detected target out of its crop and composite it onto a clean
+    solid background, returning PNG bytes.
+
+    The target mask comes from the same SAR segmentation used for RF features.
+    Edges are feathered so the cutout doesn't look pasted. If segmentation finds
+    nothing, the raw crop is shown rather than a blank tile.
+    """
+    image = load_image_array(image_path)
+    crop = crop_detection_patch(image, bbox)
+    if crop.size == 0:
+        raise ValueError("Detection bbox falls outside the image")
+
+    crop_bgr = to_bgr_uint8(crop)
+    height, width = crop_bgr.shape[:2]
+
+    mask = segment_target_mask(crop)
+    if mask is None:
+        alpha = np.ones((height, width), dtype=np.float32)
+    else:
+        alpha = mask.astype(np.float32) / 255.0
+        if feather > 0:
+            alpha = cv2.GaussianBlur(alpha, (0, 0), feather)
+
+    alpha = alpha[:, :, np.newaxis]
+    background = np.empty_like(crop_bgr)
+    background[:] = background_bgr
+    composite = (crop_bgr.astype(np.float32) * alpha + background.astype(np.float32) * (1.0 - alpha))
+    composite = composite.astype(np.uint8)
+
+    ok, buffer = cv2.imencode(".png", composite)
+    if not ok:
+        raise ValueError("Failed to encode segment image")
+    return buffer.tobytes()
 
 
 def detection_to_dict(index: int, detection: Detection) -> dict:
