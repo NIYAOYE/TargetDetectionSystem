@@ -30,6 +30,10 @@ DEFAULT_CONFIG = {
         "overlap": 64,
         "nms_threshold": 0.45,
     },
+    "segmentation": {
+        "background": [10, 15, 22],  # clean cutout backdrop, RGB
+        "feather": 1.5,  # gaussian sigma for soft mask edges; 0 = hard edge
+    },
     "ui": {
         "default_rf_enabled": True,
     },

@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 import math
 
 import cv2
@@ -6,6 +6,7 @@ import numpy as np
 
 
 DEFAULT_SCATTER_PEAK_LIMIT = 16
+MIN_TARGET_AREA = 10
 
 
 def _to_grayscale(image: np.ndarray) -> np.ndarray:
@@ -21,6 +22,68 @@ def _to_grayscale(image: np.ndarray) -> np.ndarray:
     if channels == 4:
         return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def _to_gray_uint8(image: np.ndarray) -> Optional[np.ndarray]:
+    """Single-channel uint8 view of any crop — OTSU/CLAHE below need 8-bit."""
+    if image is None or image.size == 0:
+        return None
+
+    gray = _to_grayscale(image)
+    if gray.size == 0:
+        return None
+    if gray.dtype != np.uint8:
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return gray
+
+
+def _segment_core(
+    gray_uint8: np.ndarray,
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    """Classical SAR target segmentation: denoise → enhance → OTSU → morphology
+    → largest external contour. Returns (denoised, filled_mask, main_contour);
+    mask/contour are None when nothing is found. Shared by feature extraction
+    and the target-cutout renderer so both stay in sync.
+    """
+    ksize = 3 if min(gray_uint8.shape) < 32 else 5
+    denoised = cv2.medianBlur(gray_uint8, ksize)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(denoised)
+
+    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_open)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close)
+    binary = cv2.dilate(binary, kernel_open, iterations=1)
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return denoised, None, None
+
+    main_contour = max(contours, key=cv2.contourArea)
+    mask = np.zeros_like(gray_uint8)
+    cv2.drawContours(mask, [main_contour], -1, 255, thickness=-1)
+    return denoised, mask, main_contour
+
+
+def segment_target_mask(image_crop: np.ndarray) -> Optional[np.ndarray]:
+    """Binary (0/255) uint8 mask of the dominant target in a crop, or None.
+
+    Same segmentation the RF feature extractor uses, exposed for cutting the
+    target out of its background for display.
+    """
+    gray = _to_gray_uint8(image_crop)
+    if gray is None or float(gray.std()) < 1.0:
+        # A flat patch has no target/background contrast to segment.
+        return None
+
+    _, mask, main_contour = _segment_core(gray)
+    if main_contour is None or cv2.contourArea(main_contour) < MIN_TARGET_AREA:
+        return None
+    return mask
 
 
 def crop_detection_patch(
@@ -138,56 +201,16 @@ def extract_scatter_features_from_bbox(
 
 def extract_sar_features(image_crop: np.ndarray, bbox: Tuple[float, float, float, float]) -> np.ndarray:
     del bbox
-    min_area_threshold = 10
-
-    if image_crop is None or image_crop.size == 0:
+    gray_image = _to_gray_uint8(image_crop)
+    if gray_image is None:
         return np.zeros(8, dtype=np.float32)
 
-    if image_crop.ndim == 3:
-        if image_crop.shape[2] >= 3:
-            gray_image = cv2.cvtColor(image_crop, cv2.COLOR_BGR2GRAY)
-        else:
-            gray_image = image_crop[:, :, 0]
-    else:
-        gray_image = image_crop
-
-    # OTSU thresholding below requires 8-bit input; 16-bit SAR rasters would
-    # otherwise throw and silently disable classification for the whole image.
-    if gray_image.dtype != np.uint8:
-        gray_image = cv2.normalize(gray_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-    ksize = 3 if min(gray_image.shape) < 32 else 5
-    denoised_image = cv2.medianBlur(gray_image, ksize)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced_image = clahe.apply(denoised_image)
-
-    _, binary_image = cv2.threshold(
-        enhanced_image,
-        0,
-        255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
-    )
-
-    kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_OPEN, kernel_open)
-
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel_close)
-    binary_image = cv2.dilate(binary_image, kernel_open, iterations=1)
-
-    contours, _ = cv2.findContours(
-        binary_image,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE,
-    )
-
-    if not contours:
+    denoised_image, mask, main_contour = _segment_core(gray_image)
+    if main_contour is None:
         return np.zeros(8, dtype=np.float32)
 
-    main_contour = max(contours, key=cv2.contourArea)
     area = cv2.contourArea(main_contour)
-    if area < min_area_threshold:
+    if area < MIN_TARGET_AREA:
         return np.zeros(8, dtype=np.float32)
 
     perimeter = cv2.arcLength(main_contour, True)
@@ -198,8 +221,6 @@ def extract_sar_features(image_crop: np.ndarray, bbox: Tuple[float, float, float
     width = min(width_raw, height_raw)
     aspect_ratio = length / width if width > 0 else 0
 
-    mask = np.zeros_like(gray_image)
-    cv2.drawContours(mask, [main_contour], -1, 255, thickness=-1)
     pixel_values = denoised_image[mask == 255]
 
     if pixel_values.size > 0:

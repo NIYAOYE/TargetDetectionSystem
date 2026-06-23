@@ -11,6 +11,10 @@ image_processing:
   overlap: 64
   nms_threshold: 0.45
 
+segmentation:
+  background: [10, 15, 22]   # 目标抠图的干净背景色，RGB
+  feather: 1.5               # 掩膜边缘羽化的高斯 sigma；设为 0 则为硬边
+
 ui:
   default_rf_enabled: true
 

@@ -181,6 +181,13 @@ class JobStore:
             record.updated_at = time()
             return detections_to_dicts(record.detections)
 
+    def segment_target(self, job_id: str, index: int) -> tuple[Path, tuple[float, float, float, float]]:
+        record = self.get_record(job_id)
+        with self._lock:
+            if index < 0 or index >= len(record.detections):
+                raise IndexError(index)
+            return record.image_path, record.detections[index].bbox
+
     def delete_detection(self, job_id: str, index: int) -> list[dict]:
         record = self.get_record(job_id)
         with self._lock:

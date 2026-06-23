@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SAR 目标检测与分析系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=visual-refresh-2" />
+    <link rel="stylesheet" href="/static/styles.css?v=segment-panel-1" />
   </head>
   <body>
     <svg class="icon-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;">
@@ -260,6 +260,15 @@
           </div>
           <div class="canvas-wrap">
             <canvas id="imageCanvas"></canvas>
+            <div id="segmentPanel" class="segment-panel" hidden>
+              <div class="segment-panel-head">
+                <span>目标抠图</span>
+                <button id="segmentCloseBtn" class="segment-close" type="button" title="关闭" aria-label="关闭">×</button>
+              </div>
+              <div class="segment-panel-body">
+                <img id="segmentImage" alt="目标抠图" title="点击在新标签放大" />
+              </div>
+            </div>
           </div>
         </section>
       </main>
@@ -273,6 +282,6 @@
       </footer>
     </div>
 
-    <script src="/static/app.js?v=visual-refresh-3"></script>
+    <script src="/static/app.js?v=segment-panel-1"></script>
   </body>
 </html>
