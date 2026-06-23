@@ -60,18 +60,27 @@ class ModelRegistry:
             return SyntheticDetector()
 
         resolved_device = resolve_device(device)
-        key = (detector_path.resolve(), conf_threshold, iou_threshold, resolved_device)
+        # Key on the weights only — conf/iou are applied per run, so changing a
+        # threshold must not reload the model or grow the cache unboundedly.
+        key = (detector_path.resolve(), resolved_device)
         with self._lock:
-            if key not in self._detectors:
+            detector = self._detectors.get(key)
+            if detector is None:
                 from backend.algorithms.yolo_detector import YOLODetector
 
-                self._detectors[key] = YOLODetector(
+                detector = YOLODetector(
                     model_path=str(detector_path),
                     conf_threshold=conf_threshold,
                     iou_threshold=iou_threshold,
                     device=resolved_device,
                 )
-            return self._detectors[key]
+                self._detectors[key] = detector
+            else:
+                # Reuse loaded weights; jobs run serially (single worker), so
+                # mutating the shared thresholds here is safe.
+                detector.conf_threshold = conf_threshold
+                detector.iou_threshold = iou_threshold
+            return detector
 
     def get_classifier(self, classifier_path: Optional[Path]) -> Optional[BaseClassifier]:
         if classifier_path is None:
@@ -107,26 +116,52 @@ def resolve_device(device: str) -> str:
     return device
 
 
-def global_nms(detections: list[Detection], iou_threshold: float) -> list[Detection]:
+def global_nms(
+    detections: list[Detection],
+    iou_threshold: float,
+    containment_threshold: float = 0.7,
+) -> list[Detection]:
+    """Class-agnostic greedy NMS for the detect-then-classify pipeline.
+
+    Overlapping boxes are duplicate detections of the same physical target
+    regardless of the class YOLO guessed, so suppression ignores class. In
+    addition to standard IoU, a box is suppressed when it is largely *contained*
+    in a higher-confidence box (intersection-over-smaller-area, IoS) — plain IoU
+    misses the nested case where one box sits inside a much larger one.
+    """
     if not detections:
         return []
 
+    order = sorted(range(len(detections)), key=lambda i: detections[i].confidence, reverse=True)
+
     boxes = []
-    scores = []
     for detection in detections:
         x, y, w, h = detection.bbox
-        boxes.append([float(x), float(y), float(w), float(h)])
-        scores.append(float(detection.confidence))
+        boxes.append((x, y, x + max(w, 0.0), y + max(h, 0.0), max(w, 0.0) * max(h, 0.0)))
 
-    indices = cv2.dnn.NMSBoxes(
-        boxes,
-        scores,
-        score_threshold=0.0,
-        nms_threshold=float(iou_threshold),
-    )
-    if len(indices) > 0:
-        return [detections[int(index)] for index in np.array(indices).flatten()]
-    return []
+    kept: list[Detection] = []
+    suppressed = [False] * len(detections)
+    for pos, i in enumerate(order):
+        if suppressed[i]:
+            continue
+        kept.append(detections[i])
+        ax1, ay1, ax2, ay2, a_area = boxes[i]
+        for j in order[pos + 1:]:
+            if suppressed[j]:
+                continue
+            bx1, by1, bx2, by2, b_area = boxes[j]
+            inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+            inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+            inter = inter_w * inter_h
+            if inter <= 0.0:
+                continue
+            union = a_area + b_area - inter
+            iou = inter / union if union > 0.0 else 0.0
+            smaller = min(a_area, b_area)
+            ios = inter / smaller if smaller > 0.0 else 0.0
+            if iou >= iou_threshold or ios >= containment_threshold:
+                suppressed[j] = True
+    return kept
 
 
 def clip_bbox(

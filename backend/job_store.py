@@ -34,12 +34,25 @@ class JobRecord:
 
 
 class JobStore:
-    def __init__(self, overlap: int):
+    def __init__(self, overlap: int, max_jobs: int = 50):
         self._lock = RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._pipeline = DetectionPipeline(ModelRegistry())
         self._overlap = overlap
+        self._max_jobs = max_jobs
+
+    def _evict_finished_locked(self) -> None:
+        """Drop the oldest finished jobs so the in-memory store stays bounded."""
+        excess = len(self._jobs) - self._max_jobs
+        if excess <= 0:
+            return
+        finished = sorted(
+            (r for r in self._jobs.values() if r.status in {"completed", "error"}),
+            key=lambda r: r.updated_at,
+        )
+        for record in finished[:excess]:
+            self._jobs.pop(record.job_id, None)
 
     def create_job(
         self,
@@ -58,6 +71,7 @@ class JobStore:
         )
         with self._lock:
             self._jobs[job_id] = record
+            self._evict_finished_locked()
         self._executor.submit(self._run_job, job_id)
         return self.summary(job_id)
 
